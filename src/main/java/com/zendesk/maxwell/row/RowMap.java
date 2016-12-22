@@ -3,7 +3,6 @@ package com.zendesk.maxwell.row;
 import com.fasterxml.jackson.core.*;
 import com.zendesk.maxwell.replication.BinlogPosition;
 import com.zendesk.maxwell.producer.MaxwellOutputConfig;
-import com.zendesk.maxwell.schema.Table;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -27,7 +26,6 @@ public class RowMap implements Serializable {
 	private final String rowType;
 	private final String database;
 	private final String table;
-	private final Table tableDef;
 	private final Long timestamp;
 	private BinlogPosition nextPosition;
 
@@ -39,7 +37,6 @@ public class RowMap implements Serializable {
 	private final LinkedHashMap<String, Object> data;
 	private final LinkedHashMap<String, Object> oldData;
 	private final List<String> pkColumns;
-	private List<Pattern> excludeColumns;
 
 	private static final JsonFactory jsonFactory = new JsonFactory();
 
@@ -69,38 +66,17 @@ public class RowMap implements Serializable {
 				}
 			};
 
-	public RowMap(String type, String database, String tableName, Long timestamp, List<String> pkColumns,
+	public RowMap(String type, String database, String table, Long timestamp, List<String> pkColumns,
 				  BinlogPosition nextPosition) {
 		this.rowType = type;
 		this.database = database;
-		this.table = tableName;
+		this.table = table;
 		this.timestamp = timestamp;
 		this.data = new LinkedHashMap<>();
 		this.oldData = new LinkedHashMap<>();
 		this.nextPosition = nextPosition;
 		this.pkColumns = pkColumns;
 		this.approximateSize = 100L; // more or less 100 bytes of overhead
-		this.tableDef = null;
-	}
-
-	public RowMap(String type, String database, Table table, Long timestamp, List<String> pkColumns,
-			BinlogPosition nextPosition) {
-		this.rowType = type;
-		this.database = database;
-		this.table = table.getName();
-		this.timestamp = timestamp;
-		this.data = new LinkedHashMap<>();
-		this.oldData = new LinkedHashMap<>();
-		this.nextPosition = nextPosition;
-		this.pkColumns = pkColumns;
-		this.approximateSize = 100L; // more or less 100 bytes of overhead
-		this.tableDef = table;
-	}
-
-	public RowMap(String type, String database, Table table, Long timestamp, List<String> pkColumns,
-				  BinlogPosition nextPosition, List<Pattern> excludeColumns) {
-		this(type, database, table, timestamp, pkColumns, nextPosition);
-		this.excludeColumns = excludeColumns;
 	}
 
 	public String pkToJson(KeyFormat keyFormat) throws IOException {
@@ -203,7 +179,6 @@ public class RowMap implements Serializable {
 
 	private void writeMapToJSON(String jsonMapName, LinkedHashMap<String, Object> data, boolean includeNullField) throws IOException {
 		JsonGenerator generator = jsonGeneratorThreadLocal.get();
-
 		generator.writeObjectFieldStart(jsonMapName); // start of jsonMapName: {
 
 		for ( String key: data.keySet() ) {
@@ -262,13 +237,13 @@ public class RowMap implements Serializable {
 			g.writeNumberField("thread_id", this.threadId);
 		}
 
-		if ( this.excludeColumns != null ) {
+		if ( outputConfig.excludeColumns.size() > 0 ) {
 			// NOTE: to avoid concurrent modification.
-			Set<String> keys = new HashSet<String>();
+			Set<String> keys = new HashSet<>();
 			keys.addAll(this.data.keySet());
 			keys.addAll(this.oldData.keySet());
 
-			for ( Pattern p : this.excludeColumns ) {
+			for ( Pattern p : outputConfig.excludeColumns ) {
 				for ( String key : keys ) {
 					if ( p.matcher(key).matches() ) {
 						this.data.remove(key);
@@ -295,10 +270,6 @@ public class RowMap implements Serializable {
 		String s = b.toString();
 		b.reset();
 		return s;
-	}
-
-	public String getColumnType(String column) {
-		return this.tableDef.findColumn(column).getType();
 	}
 
 	public Set<String> getDataKeys() {
