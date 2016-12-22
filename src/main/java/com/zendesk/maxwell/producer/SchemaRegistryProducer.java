@@ -10,6 +10,7 @@ import org.apache.commons.io.IOUtils;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.KafkaException;
+import org.json.JSONException;
 import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,12 +29,12 @@ public class SchemaRegistryProducer extends AbstractKafkaProducer {
     private final KafkaProducer<String, GenericRecord> kafka;
     private String schemaMappingURI;
 
-    private static final String keyLookup = "key_column";
-    private static final String dataLookup = "data_column";
-    private static final String schemaLookup = "schema";
-    private static final String metadataLookup = "metadata";
-    private static final String nestedSchemaLookup = "child_schemas";
-    private static final String childSchemaLookup = "child_schema_uri";
+    private static final String LOOKUP_KEY = "key_column";
+    private static final String LOOKUP_DATA = "data_column";
+    private static final String LOOKUP_SCHEMA = "schema";
+    private static final String LOOKUP_METADATA = "metadata";
+    private static final String LOOKUP_NESTED_SCHEMA = "child_schemas";
+    private static final String LOOKUP_CHILD_SCHEMA = "child_schema_uri";
 
     private static final String JSON_SUFFIX = ".json";
 
@@ -87,7 +88,7 @@ public class SchemaRegistryProducer extends AbstractKafkaProducer {
     }
 
     /** TODO: fix or rm docs (please fix)
-     * Load the keyLookup, dataColumn and childSchemas from the specified config file.
+     * Load the LOOKUP_KEY, dataColumn and childSchemas from the specified config file.
      */
     private JSONObject loadResource(String resourceURI) {
         if (resourceURI == null) {
@@ -115,17 +116,17 @@ public class SchemaRegistryProducer extends AbstractKafkaProducer {
             JSONObject schemaInfo = getResourceWithCache(getResourceKey(rowMap.getTable()));
 
             // get the schema. the structure contains the schema and metadata
-            JSONObject schema = schemaInfo.getJSONObject(this.schemaLookup);
+            JSONObject schema = schemaInfo.getJSONObject(this.LOOKUP_SCHEMA);
 
             // if this schema contains a nested schema (translating a column's string data into a json object)
             // find the schema and insert it into the schema "in the right place"
-            if (getMetadata(schemaInfo).getBoolean(this.nestedSchemaLookup)) {
+            if (getMetadata(schemaInfo).getBoolean(this.LOOKUP_NESTED_SCHEMA)) {
                 JSONObject metadata = getMetadata(schemaInfo);
-                String uri = metadata.getString(this.childSchemaLookup)
-                        + rowMap.getData(metadata.getString(this.keyLookup))
-                        + this.jsonSuffix;
-                JSONObject childSchema = getResourceWithCache(uri).getJSONObject(this.schemaLookup);
-                String dataColumn = metadata.getString(this.dataLookup);
+                String uri = metadata.getString(this.LOOKUP_CHILD_SCHEMA)
+                        + rowMap.getData(metadata.getString(this.LOOKUP_KEY))
+                        + this.JSON_SUFFIX;
+                JSONObject childSchema = getResourceWithCache(uri).getJSONObject(this.LOOKUP_SCHEMA);
+                String dataColumn = metadata.getString(this.LOOKUP_DATA);
 
                 for (Object field : schema.getJSONArray("fields")) {
                     JSONObject f = (JSONObject) field;
@@ -142,7 +143,7 @@ public class SchemaRegistryProducer extends AbstractKafkaProducer {
     }
 
     private JSONObject getMetadata(JSONObject schemaInfo) {
-        return schemaInfo.getJSONObject(this.metadataLookup);
+        return schemaInfo.getJSONObject(this.LOOKUP_METADATA);
     }
 
     private JSONObject getResourceWithCache(String uri) {
@@ -221,8 +222,8 @@ public class SchemaRegistryProducer extends AbstractKafkaProducer {
         JSONObject schemaInfo = this.resourceCache.get(getResourceKey(rowMap.getTable()));
 
         String dataColumn = null;
-        if (getMetadata(schemaInfo).getBoolean(this.nestedSchemaLookup)) {
-            dataColumn = getMetadata(schemaInfo).getString(this.dataLookup);
+        if (getMetadata(schemaInfo).getBoolean(this.LOOKUP_NESTED_SCHEMA)) {
+            dataColumn = getMetadata(schemaInfo).getString(this.LOOKUP_DATA);
         }
 
         for (String dataKey : rowMap.getDataKeys()) {
@@ -235,6 +236,11 @@ public class SchemaRegistryProducer extends AbstractKafkaProducer {
             // time milli/micro precision
             // timestamp milli/micro precision
             // duration... wtf?
+            // TODO/NOTABLE: when creating a schema if you specify multiple types for a field you get the field type with the data:
+            // TODO/NOTABLE: {"name": "field_foo", "type":["null", "string"]} -> {field_foo: {string: <value>}}
+            // TODO/NOTABLE: if you specify one type for a field you get just the data:
+            // TODO/NOTABLE: {"name": "field_foo", "type": "string"} -> {field_foo: <value>}
+            // TODO/NOTABLE: this was found using the kafka-avro-console-consume. YMMV.
             ArrayList<String> validTypes = getTypesForSchema(schema, dataKey);
 
             if (data == null) {
@@ -242,22 +248,33 @@ public class SchemaRegistryProducer extends AbstractKafkaProducer {
                     throw new RuntimeException("Invalid null value found in field " + schema.getField(dataKey).name());
                 }
                 record.put(dataKey, null);
+            } else if (validTypes.contains((TYPE_STRING))) {
+                record.put(dataKey, data.toString());
+            } else if (validTypes.contains((TYPE_INT))) {
+                record.put(dataKey, Integer.parseInt(data.toString()));
+            } else if (validTypes.contains((TYPE_BOOLEAN))) {
+                record.put(dataKey, Boolean.parseBoolean(data.toString()));
+            } else if (validTypes.contains((TYPE_FIXED))) {
+                // TODO: ?
+                record.put(dataKey, data.toString());
+            } else if (validTypes.contains((TYPE_BYTES))) {
+                // TODO: deal with all types to bytes... but do we care?
+                // TODO: this only works for bigdecimal right now
+                byte[] bytes = valueSerializer(data);
+                record.put(dataKey, java.nio.ByteBuffer.wrap(bytes)); //data.toString().getBytes())
             } else if (validTypes.contains(TYPE_DOUBLE)) {
                 record.put(dataKey, Double.parseDouble(data.toString()));
             } else if (validTypes.contains((TYPE_FLOAT))) {
                 record.put(dataKey, Float.parseFloat(data.toString()));
             } else if (validTypes.contains((TYPE_LONG))) {
                 record.put(dataKey, Long.parseLong(data.toString()));
-<<<<<<< HEAD
-            } else if (dataColumn != null && dataKey.equals(dataColumn)) {
+            } else if (dataColumn != null && dataKey.equals(dataColumn)) {// if type == record...
                 // the issue here is that we cannot blindly populate the record since we may have a subrecord that
                 // is just a string right now, but is actually a json blob with an associated schema.
                 Schema childSchema = ((Schema) record.getSchema()).getField(dataColumn).schema();
                 GenericRecord childRecord = populateRecordFromJson(childSchema, new JSONObject(data.toString()));
                 record.put(dataKey, childRecord);
-            } else
-
-            {
+            } else {
                 record.put(dataKey, data);
             }
         }
@@ -276,21 +293,21 @@ public class SchemaRegistryProducer extends AbstractKafkaProducer {
         for (String key : data.keySet()) {
             if (schema.getField(key).schema().getType().getName().equals("record")) {
                 record.put(key, populateRecordFromJson(schema.getField(key).schema(), (JSONObject) data.get(key)));
-            } else if (validTypes.contains((TYPE_STRING))) {
-                record.put(dataKey, data.toString());
-            } else if (validTypes.contains((TYPE_INT))) {
-                record.put(dataKey, Integer.parseInt(data.toString()));
-            } else if (validTypes.contains((TYPE_BOOLEAN))) {
-                record.put(dataKey, Boolean.parseBoolean(data.toString()));
-            } else if (validTypes.contains((TYPE_FIXED))) {
-                record.put(dataKey, data.toString());
-            } else if (validTypes.contains((TYPE_BYTES))) {
-                // TODO:
-                byte[] bytes = valueSerializer(data);
-                record.put(dataKey, java.nio.ByteBuffer.wrap(bytes)); //data.toString().getBytes())
             } else {
-                throw new RuntimeException("Unknown mapping for avro type "
-                        + ((Schema.Field) schema.getField(dataKey)).schema().getType().getName().toString());
+                Object obj = data.get(key);
+                if (obj instanceof Double) {
+                    record.put(key, ((Double) obj).doubleValue());
+                } else if (obj instanceof Float) {
+                    record.put(key, ((Float) obj).floatValue());
+                } else if (obj instanceof Long) {
+                    record.put(key, ((Long) obj).longValue());
+                } else if (obj instanceof Integer) {
+                    record.put(key, ((Integer) obj).intValue());
+                } else if (obj instanceof String) {
+                    record.put(key, obj.toString());
+                } else {
+                    throw new RuntimeException("Unknown type mapping from " + obj.getClass());
+                }
             }
         }
         return record;
@@ -323,10 +340,9 @@ public class SchemaRegistryProducer extends AbstractKafkaProducer {
             record = new ProducerRecord<>(this.ddlTopic, this.ddlPartitioner.kafkaPartition(r, getNumPartitions(this.ddlTopic)), key, genericRecord);
         } else {
             // TODO: test against RI
-            Schema schema = getSchemaFromCache(assembleSchema(r));
-            // TODO: fix this
-            //String schemaString = getResourceWithCache(getResourceKey(r.getTable())).get("schema").toString();
-            //Schema schema = getSchemaFromCache(schemaString);
+            String schemaString = assembleSchema(r);
+            Schema schema = getSchemaFromCache(schemaString);
+
             genericRecord = populateRecordFromRowMap(schema, r);
             String topic = generateTopic(this.topic, r);
             record = new ProducerRecord<>(topic, this.partitioner.kafkaPartition(r, getNumPartitions(topic)), key, genericRecord);
