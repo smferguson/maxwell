@@ -120,7 +120,7 @@ public class SchemaRegistryProducer extends AbstractKafkaProducer {
         try {
             JSONObject schemaInfo = getResourceWithCache(getResourceKey(rowMap.getTable()));
 
-            // get the schema. the structure contains both schema and metadata
+            // get the schema. the structure contains both schema and metadata.
             JSONObject schema = schemaInfo.getJSONObject(this.LOOKUP_SCHEMA);
 
             // if this schema contains a nested schema - translating a column's string data into a json object -
@@ -211,7 +211,7 @@ public class SchemaRegistryProducer extends AbstractKafkaProducer {
      * @param dataKey
      * @return An ArrayList containing the valid types for the key.
      */
-    private ArrayList<String> getTypesForSchema(Schema schema, String dataKey) {
+    /*private ArrayList<String> getTypesForSchema(Schema schema, String dataKey) {
         ArrayList<String> validTypes = new ArrayList<String>();
         Schema typeSchema = ((Schema.Field) schema.getField(dataKey)).schema();
 
@@ -236,7 +236,7 @@ public class SchemaRegistryProducer extends AbstractKafkaProducer {
             }
         }
         return validTypes;
-    }
+    }*/
 
     /**
      * Create and populate a GenericRecord based on a schema and a row of data.
@@ -247,51 +247,37 @@ public class SchemaRegistryProducer extends AbstractKafkaProducer {
      */
     private GenericRecord populateSchemaFromRowMap(Schema schema, RowMap rowMap) {
         GenericRecord record = new GenericData.Record(schema);
-        // TODO: why looking schemainfo up again?
         JSONObject schemaInfo = this.resourceCache.get(getResourceKey(rowMap.getTable()));
 
         String dataColumn = null;
+        // does this schema contain a string that we want to apply a schema to?
         if (getMetadata(schemaInfo).getBoolean(this.LOOKUP_HAS_NESTED_SCHEMA)) {
             dataColumn = getMetadata(schemaInfo).getString(this.LOOKUP_DATA);
         }
 
-        for (String dataKey : rowMap.getDataKeys()) {
-            Object data = rowMap.getData(dataKey);
-            // TODO: what other types need dealing with?
+        for (String key : rowMap.getDataKeys()) {
+            // TODO: what about nulls?
+
             // TODO/NOTABLE: when creating a schema if you specify multiple types for a field you get the field type with the data:
             // TODO/NOTABLE: {"name": "field_foo", "type":["null", "string"]} -> {field_foo: {string: <value>}}
             // TODO/NOTABLE: if you specify one type for a field you get just the data:
             // TODO/NOTABLE: {"name": "field_foo", "type": "string"} -> {field_foo: <value>}
-            // TODO/NOTABLE: this was found using the kafka-avro-console-consume. YMMV.
-            ArrayList<String> validTypes = getTypesForSchema(schema, dataKey);
+            // TODO/NOTABLE: this was found using the kafka-avro-console-consumer. YMMV.
 
-            if (data == null) {
-                if (!validTypes.contains(TYPE_NULL)) {
-                    throw new RuntimeException("Invalid null value found in field " + schema.getField(dataKey).name());
-                }
-                record.put(dataKey, null);
-            } else if (validTypes.contains((TYPE_STRING))) {
-                record.put(dataKey, data.toString());
-            } else if (validTypes.contains((TYPE_INT))) {
-                record.put(dataKey, Integer.parseInt(data.toString()));
-            } else if (validTypes.contains((TYPE_BOOLEAN))) {
-                record.put(dataKey, Boolean.parseBoolean(data.toString()));
-            } else if (validTypes.contains(TYPE_DOUBLE)) {
-                record.put(dataKey, Double.parseDouble(data.toString()));
-            } else if (validTypes.contains((TYPE_FLOAT))) {
-                record.put(dataKey, Float.parseFloat(data.toString()));
-            } else if (validTypes.contains((TYPE_LONG))) {
-                record.put(dataKey, Long.parseLong(data.toString()));
-            } else if (dataColumn != null && dataKey.equals(dataColumn)) {
+//            ArrayList<String> validTypes = getTypesForSchema(schema, key);
+            Object data = rowMap.getData(key);
+            if (dataColumn != null && key.equals(dataColumn)) {
                 // we have a column that contains a child record and we need to apply a schema to it
                 // get the child schema for the dataColumn
                 Schema childSchema = ((Schema) record.getSchema()).getField(dataColumn).schema();
                 // populate the data.
                 GenericRecord childRecord = populateSchemaFromJson(childSchema, new JSONObject(data.toString()));
                 // finally add the data to the record
-                record.put(dataKey, childRecord);
+                record.put(key, childRecord);
             } else {
-                throw new RuntimeException("Unknown types in populateSchemaFromRowMap(): " + validTypes.toString());
+                String dataType = schema.getField(key).schema().getType().getName().toString();
+                Object value = getAvroValue(dataType, data);
+                record.put(key, value);
             }
         }
         return record;
@@ -312,23 +298,39 @@ public class SchemaRegistryProducer extends AbstractKafkaProducer {
             if (schema.getField(key).schema().getType().getName().equals("record")) {
                 record.put(key, populateSchemaFromJson(schema.getField(key).schema(), (JSONObject) data.get(key)));
             } else {
-                Object obj = data.get(key);
-                if (obj instanceof Double) {
-                    record.put(key, ((Double) obj).doubleValue());
-                } else if (obj instanceof Float) {
-                    record.put(key, ((Float) obj).floatValue());
-                } else if (obj instanceof Long) {
-                    record.put(key, ((Long) obj).longValue());
-                } else if (obj instanceof Integer) {
-                    record.put(key, ((Integer) obj).intValue());
-                } else if (obj instanceof String) {
-                    record.put(key, obj.toString());
-                } else {
-                    throw new RuntimeException("Unknown type mapping from " + obj.getClass());
-                }
+                String dataType = schema.getField(key).schema().getType().getName().toString();
+                Object obj = getAvroValue(dataType, data.get(key));
+                record.put(key, obj);
             }
         }
         return record;
+    }
+
+    /**
+     * Given an Avro Type and a value return the data for the value.
+     *
+     * @param type
+     * @param value
+     * @return the data for the value.
+     */
+    private Object getAvroValue(String type, Object value) {
+        if (type.equals(TYPE_STRING)) {
+            return value.toString();
+        } else if (type.equals(TYPE_INT)) {
+            return Integer.parseInt(value.toString());
+        } else if (type.equals(TYPE_BOOLEAN)) {
+            return Boolean.parseBoolean(value.toString());
+        } else if (type.equals(TYPE_DOUBLE)) {
+            return Double.parseDouble(value.toString());
+        } else if (type.equals(TYPE_FLOAT)) {
+            return Float.parseFloat(value.toString());
+        } else if (type.equals(TYPE_LONG)) {
+            return Long.parseLong(value.toString());
+        } else if (type.equals(TYPE_NULL)) {
+            return null;
+        } else {
+            throw new RuntimeException("Unknown type mapping in getAvroValue() for: " + type);
+        }
     }
 
     protected Integer getNumPartitions(String topic) {
