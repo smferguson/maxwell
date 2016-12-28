@@ -109,7 +109,7 @@ public class MaxwellConfig extends AbstractConfig {
 		parser.accepts( "output_thread_id", "produced records include thread_id; [true|false]. default: false" ).withOptionalArg();
 		parser.accepts( "output_ddl", "produce DDL records to ddl_kafka_topic [true|false]. default: false" ).withOptionalArg();
 		parser.accepts( "ddl_kafka_topic", "optionally provide a topic name to push DDL records to. default: kafka_topic").withOptionalArg();
-		parser.accepts( "schema_mapping_uri", "some awesome doc").withOptionalArg(); // TODO
+		parser.accepts( "schema_mapping_uri", "the base location of the json schemas. e.g. file:/some/awesome/uri/").withOptionalArg(); // TODO
 
 		parser.accepts( "__separator_5" );
 

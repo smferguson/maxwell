@@ -127,6 +127,9 @@ kafka.acks=1
 
 # confluent schema registry specifics
 #kafka.schema.registry.url=http://localhost:8081
+# the base location of the json schemas.
+#schema_mapping_uri=file:/some/awesome/uri/
+
 
 
 ######### filter stuff ###############
