@@ -211,7 +211,7 @@ public class SchemaRegistryProducer extends AbstractKafkaProducer {
      * @param dataKey
      * @return An ArrayList containing the valid types for the key.
      */
-    /*private ArrayList<String> getTypesForSchema(Schema schema, String dataKey) {
+    private ArrayList<String> getTypesForSchema(Schema schema, String dataKey) {
         ArrayList<String> validTypes = new ArrayList<String>();
         Schema typeSchema = ((Schema.Field) schema.getField(dataKey)).schema();
 
@@ -224,11 +224,13 @@ public class SchemaRegistryProducer extends AbstractKafkaProducer {
             List<Schema> types = ((Schema.Field) schema.getField(dataKey)).schema().getTypes();
             Schema[] schemas = types.toArray(new Schema[types.size()]);
 
+            // TODO: add check for this
             // we only know how to deal with unions of null and one specific type
             // ok: ["null", "int"]
             // not ok: ["int", "string"]
-            if (schemas.length > 2 || (schemas.length == 2 && !schemas.toString().contains("null"))) {
-                throw new RuntimeException(">2 types for key " + dataKey);
+            // TODO: for now keep it very simple
+            if (schemas.length > 1) {
+                throw new RuntimeException(">1 types for key " + dataKey);
             }
 
             for (Schema s : schemas) {
@@ -236,7 +238,7 @@ public class SchemaRegistryProducer extends AbstractKafkaProducer {
             }
         }
         return validTypes;
-    }*/
+    }
 
     /**
      * Create and populate a GenericRecord based on a schema and a row of data.
@@ -264,7 +266,6 @@ public class SchemaRegistryProducer extends AbstractKafkaProducer {
             // TODO/NOTABLE: {"name": "field_foo", "type": "string"} -> {field_foo: <value>}
             // TODO/NOTABLE: this was found using the kafka-avro-console-consumer. YMMV.
 
-//            ArrayList<String> validTypes = getTypesForSchema(schema, key);
             Object data = rowMap.getData(key);
             if (dataColumn != null && key.equals(dataColumn)) {
                 // we have a column that contains a child record and we need to apply a schema to it
@@ -275,8 +276,8 @@ public class SchemaRegistryProducer extends AbstractKafkaProducer {
                 // finally add the data to the record
                 record.put(key, childRecord);
             } else {
-                String dataType = schema.getField(key).schema().getType().getName().toString();
-                Object value = getAvroValue(dataType, data);
+                ArrayList<String> dataTypes = getTypesForSchema(schema, key);
+                Object value = getAvroValue(dataTypes, data);
                 record.put(key, value);
             }
         }
@@ -298,8 +299,8 @@ public class SchemaRegistryProducer extends AbstractKafkaProducer {
             if (schema.getField(key).schema().getType().getName().equals("record")) {
                 record.put(key, populateSchemaFromJson(schema.getField(key).schema(), (JSONObject) data.get(key)));
             } else {
-                String dataType = schema.getField(key).schema().getType().getName().toString();
-                Object obj = getAvroValue(dataType, data.get(key));
+                ArrayList<String> dataTypes = getTypesForSchema(schema, key);
+                Object obj = getAvroValue(dataTypes, data.get(key));
                 record.put(key, obj);
             }
         }
@@ -309,27 +310,27 @@ public class SchemaRegistryProducer extends AbstractKafkaProducer {
     /**
      * Given an Avro Type and a value return the data for the value.
      *
-     * @param type
+     * @param types
      * @param value
      * @return the data for the value.
      */
-    private Object getAvroValue(String type, Object value) {
-        if (type.equals(TYPE_STRING)) {
+    private Object getAvroValue(ArrayList<String> types, Object value) {
+        if (types.contains(TYPE_STRING)) {
             return value.toString();
-        } else if (type.equals(TYPE_INT)) {
+        } else if (types.contains(TYPE_INT)) {
             return Integer.parseInt(value.toString());
-        } else if (type.equals(TYPE_BOOLEAN)) {
+        } else if (types.contains(TYPE_BOOLEAN)) {
             return Boolean.parseBoolean(value.toString());
-        } else if (type.equals(TYPE_DOUBLE)) {
+        } else if (types.contains(TYPE_DOUBLE)) {
             return Double.parseDouble(value.toString());
-        } else if (type.equals(TYPE_FLOAT)) {
+        } else if (types.contains(TYPE_FLOAT)) {
             return Float.parseFloat(value.toString());
-        } else if (type.equals(TYPE_LONG)) {
+        } else if (types.contains(TYPE_LONG)) {
             return Long.parseLong(value.toString());
-        } else if (type.equals(TYPE_NULL)) {
+        } else if (types.contains(TYPE_NULL)) {
             return null;
         } else {
-            throw new RuntimeException("Unknown type mapping in getAvroValue() for: " + type);
+            throw new RuntimeException("Unknown type mapping in getAvroValue() for: " + types);
         }
     }
 
